@@ -1,9 +1,12 @@
 use std::process::{exit, Stdio};
-use std::thread::sleep;
+use std::thread::{current, sleep};
 use std::time::{Duration, Instant};
 
+use keyframe::ease_with_scaled_time;
 use x11rb::connection::{Connection as _, RequestConnection as _};
 use x11rb::protocol::screensaver;
+
+use keyframe::{ease, functions};
 
 use anyhow::*;
 
@@ -60,6 +63,7 @@ fn main() -> Result<()> {
     let step_down = 5;
     let step_down_mult = 5;
     let timeout = 4_000;
+    let fade_out = 6f32;
 
     let (conn, screen_num) = x11rb::connect(None)?;
     let screen = &conn.setup().roots[screen_num];
@@ -79,31 +83,47 @@ fn main() -> Result<()> {
             println!("now idle");
             // we are now becoming idle
             state = Idle;
-            for i in (0..current_backlight+1).step_by(step_down).rev() {
-                // set the backlight
-                let start = Instant::now();
-                set_backlight(i)?;
-                current_backlight = i;
-                // check if we're not idle anymore
-                idle = screensaver::query_info(&conn, screen.root)?.reply()?.ms_since_user_input;
-                if idle < timeout {
-                    state = NotIdle;
-                    println!("early breaking from idle step_down");
+            let start = Instant::now();
+            let starting_backlight = current_backlight as f32;
+            let mut remaining = fade_out;
+            loop {
+                remaining -= start.elapsed().as_secs_f32();
+                if remaining <= 0.0 {
+                    if current_backlight != 0 {
+                        set_backlight(0)?;
+                        current_backlight = 0;
+                    }
                     break;
                 }
-                let timer = start.elapsed();
-                println!("took {} ms", timer.as_millis());
-                if timer.as_millis() < 9*step_down_mult {
-                    sleep(Duration::from_millis(10*(step_down_mult as u64))-timer);
-                }
-                //sleep(Duration::from_millis(10));
+                let tween = ease_with_scaled_time(functions::Linear, 0.0, starting_backlight, remaining, fade_out);
+                let tween = tween as u8;
+                set_backlight(tween)?;
+                current_backlight = tween;
+                println!("tween={tween}, remaining={remaining}")
             }
+            // for i in (0..current_backlight+1).step_by(step_down).rev() {
+            //     // set the backlight
+            //     let start = Instant::now();
+            //     set_backlight(i)?;
+            //     current_backlight = i;
+            //     // check if we're not idle anymore
+            //     idle = screensaver::query_info(&conn, screen.root)?.reply()?.ms_since_user_input;
+            //     if idle < timeout {
+            //         state = NotIdle;
+            //         println!("early breaking from idle step_down");
+            //         break;
+            //     }
+            //     let timer = start.elapsed();
+            //     println!("took {} ms", timer.as_millis());
+            //     if timer.as_millis() < 9*step_down_mult {
+            //         sleep(Duration::from_millis(10*(step_down_mult as u64))-timer);
+            //     }
+            // }
             //set_power_led(PowerLedState::Off)?;
         } else if state == Idle && idle <= timeout {
             println!("now not idle");
             // we are now becoming not idle
             state = NotIdle;
-            //set_power_led(PowerLedState::Auto)?;
             for i in (current_backlight..backlight+1).step_by(step_up) {
                 // set the backlight
                 set_backlight(i)?;
