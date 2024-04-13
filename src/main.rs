@@ -63,7 +63,7 @@ fn main() -> Result<()> {
     let step_down = 5;
     let step_down_mult = 5;
     let timeout = 4_000;
-    let fade_out = 6f32;
+    let fade_out = 1f32;
 
     let (conn, screen_num) = x11rb::connect(None)?;
     let screen = &conn.setup().roots[screen_num];
@@ -85,9 +85,11 @@ fn main() -> Result<()> {
             state = Idle;
             let start = Instant::now();
             let starting_backlight = current_backlight as f32;
-            let mut remaining = fade_out;
+            let mut remaining;
+            let mut iteration_start;
             loop {
-                remaining -= start.elapsed().as_secs_f32();
+                iteration_start = Instant::now();
+                remaining = fade_out - start.elapsed().as_secs_f32();
                 if remaining <= 0.0 {
                     if current_backlight != 0 {
                         set_backlight(0)?;
@@ -95,32 +97,30 @@ fn main() -> Result<()> {
                     }
                     break;
                 }
-                let tween = ease_with_scaled_time(functions::Linear, 0.0, starting_backlight, remaining, fade_out);
+                let tween = ease_with_scaled_time(functions::EaseOut, 0.0, starting_backlight, remaining, fade_out);
                 let tween = tween as u8;
+                if tween == current_backlight {
+                    sleep(Duration::from_millis(10));
+                    continue;
+                }
                 set_backlight(tween)?;
                 current_backlight = tween;
-                println!("tween={tween}, remaining={remaining}")
+                println!("tween={tween}, remaining={remaining}");
+                // check if they're not idle anymore
+                idle = screensaver::query_info(&conn, screen.root)?.reply()?.ms_since_user_input;
+                if idle <= timeout {
+                    println!("user no longer idle");
+                    state = Idle;
+                    break;
+                }
+
+                // sleep so we don't make a million ectool calls
+                let Some(sleep_timer) = Duration::from_millis(50).checked_sub(iteration_start.elapsed()) else { continue; };
+                sleep(sleep_timer);
             }
-            // for i in (0..current_backlight+1).step_by(step_down).rev() {
-            //     // set the backlight
-            //     let start = Instant::now();
-            //     set_backlight(i)?;
-            //     current_backlight = i;
-            //     // check if we're not idle anymore
-            //     idle = screensaver::query_info(&conn, screen.root)?.reply()?.ms_since_user_input;
-            //     if idle < timeout {
-            //         state = NotIdle;
-            //         println!("early breaking from idle step_down");
-            //         break;
-            //     }
-            //     let timer = start.elapsed();
-            //     println!("took {} ms", timer.as_millis());
-            //     if timer.as_millis() < 9*step_down_mult {
-            //         sleep(Duration::from_millis(10*(step_down_mult as u64))-timer);
-            //     }
-            // }
-            //set_power_led(PowerLedState::Off)?;
-        } else if state == Idle && idle <= timeout {
+        }
+        
+        if state == Idle && idle <= timeout {
             println!("now not idle");
             // we are now becoming not idle
             state = NotIdle;
