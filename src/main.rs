@@ -1,15 +1,19 @@
 use std::process::{exit, Stdio};
+use tokio::sync::mpsc;
 use std::thread::{current, sleep};
 use std::time::{Duration, Instant};
 
+use input::event::EventTrait;
 use keyframe::ease_with_scaled_time;
 use x11rb::connection::{Connection as _, RequestConnection as _};
 use x11rb::protocol::screensaver;
 
 use keyframe::functions;
 
-use anyhow::*;
+use anyhow::{Result, anyhow};
 use x11rb::rust_connection::RustConnection;
+
+mod libinput;
 
 fn ectool_pwmsetkblight(level: u8) -> Result<()> {
     let cmd = std::process::Command::new("ectool")
@@ -193,7 +197,12 @@ impl Fwkbd {
     }
 }
 
-fn main() -> Result<()> {
+use libinput::*;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let mut input = LibinputEventListener::new();
+
     let backlight = 60;
 
     // get an X11 connection

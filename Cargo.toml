@@ -7,7 +7,11 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.82"
+input = "0.9.0"
 keyframe = { version = "1.1.1", default-features = false }
+libc = "0.2.153"
+rustix = "0.38.32"
+tokio = { version = "1", features = ["full"] }
 x11rb = { version = "0.13.0", features = ["screensaver"] }
 
 
