@@ -59,11 +59,9 @@ enum State {
 fn main() -> Result<()> {
     use State::*;
     let backlight = 60;
-    let step_up = 4;
-    let step_down = 5;
-    let step_down_mult = 5;
-    let timeout = 4_000;
+    let timeout = 2_000;
     let fade_out = 1f32;
+    let fade_in = 0.5f32;
 
     let (conn, screen_num) = x11rb::connect(None)?;
     let screen = &conn.setup().roots[screen_num];
@@ -124,11 +122,35 @@ fn main() -> Result<()> {
             println!("now not idle");
             // we are now becoming not idle
             state = NotIdle;
-            for i in (current_backlight..backlight+1).step_by(step_up) {
-                // set the backlight
-                set_backlight(i)?;
-                current_backlight = i;
-                sleep(Duration::from_millis(1));
+
+            let start = Instant::now();
+            let starting_backlight = current_backlight as f32;
+            let goal_backlight = backlight as f32;
+            let mut remaining;
+            let mut iteration_start;
+            loop {
+                iteration_start = Instant::now();
+                remaining = fade_in - start.elapsed().as_secs_f32();
+                if remaining <= 0.0 {
+                    if current_backlight != backlight {
+                        set_backlight(backlight)?;
+                        current_backlight = backlight;
+                    }
+                    break;
+                }
+                let tween = ease_with_scaled_time(functions::EaseInQuad, goal_backlight, starting_backlight, remaining, fade_in);
+                let tween = tween as u8;
+                if tween == current_backlight {
+                    sleep(Duration::from_millis(10));
+                    continue;
+                }
+                set_backlight(tween)?;
+                current_backlight = tween;
+                println!("tween={tween}, remaining={remaining}");
+
+                // sleep so we don't make a million ectool calls
+                let Some(sleep_timer) = Duration::from_millis(50).checked_sub(iteration_start.elapsed()) else { continue; };
+                sleep(sleep_timer);
             }
         }
 
