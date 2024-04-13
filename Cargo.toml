@@ -1,0 +1,18 @@
+[package]
+name = "fwkbd"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.82"
+x11rb = { version = "0.13.0", features = ["screensaver"] }
+
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+panic = "abort"
+strip = true
+lto = true
