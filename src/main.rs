@@ -1,10 +1,13 @@
+use std::borrow::Borrow;
 use std::process::{exit, Stdio};
+use libinput::LibinputEventListener;
 use tokio::sync::mpsc;
+use tokio::time::interval;
 use std::thread::{current, sleep};
 use std::time::{Duration, Instant};
 
 use input::event::EventTrait;
-use keyframe::ease_with_scaled_time;
+use keyframe::{ease_with_scaled_time, EasingFunction};
 use x11rb::connection::{Connection as _, RequestConnection as _};
 use x11rb::protocol::screensaver;
 
@@ -17,6 +20,7 @@ mod libinput;
 
 fn ectool_pwmsetkblight(level: u8) -> Result<()> {
     let cmd = std::process::Command::new("ectool")
+        .args(&["--interface=lpc", "--name=cros_ec"])
         .arg("pwmsetkblight")
         .arg(level.to_string())
         .stdin(Stdio::null())
@@ -39,6 +43,7 @@ enum State {
 struct Fwkbd {
     _x11_conn: RustConnection,
     _x11_screen: u32,
+    _libinput: LibinputEventListener,
     state: State,
     idle_timer: u32,
     idle_threshold: u32,
@@ -51,6 +56,7 @@ impl Fwkbd {
         Fwkbd {
             _x11_conn: conn,
             _x11_screen: screen,
+            _libinput: LibinputEventListener::new(),
             state: State::NotIdle,
             idle_timer: 69420,
             idle_threshold,
@@ -111,6 +117,107 @@ impl Fwkbd {
     pub fn set_backlight(&mut self, level: u8) -> Result<()> {
         ectool_pwmsetkblight(level)?;
         self.current_backlight = level;
+        println!("bl: {level}");
+        Ok(())
+    }
+
+    pub async fn async_loop(&mut self) -> Result<()> {
+        use State::*;
+        let fade_out = 1f32;
+        let fade_in = 0.5f32;
+    
+        let timeout = Duration::from_millis(4_000);
+    
+        loop {
+            tokio::select! {
+                Ok(changed) = self.get_next_event() => {
+                    // state now notidle
+                    if changed {
+                        println!("newly notidle");
+                        self.fade_backlight(self.backlight, fade_in, functions::EaseIn).await?;
+                    }
+                }
+                _ = tokio::time::sleep(timeout) => {
+                    self.state = Idle;
+                    println!("got sleep");
+                    self.fade_backlight(0, fade_out, functions::EaseOut).await?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn get_next_event(&mut self) -> Result<bool> {
+        use State::*;
+        use libinput::LibinputSyncEventType::*;
+        let event = self._libinput.next().await?;
+        if matches!(event.event_type, DeviceAdded | DeviceRemoved) {
+            return Ok(false);
+        }
+        let changed = self.state == Idle;
+        self.state = NotIdle;
+        Ok(changed)
+    }
+
+    pub async fn try_update(&mut self) -> Result<bool> {
+        use State::*;
+        use libinput::LibinputSyncEventType::*;
+        while !self._libinput.is_empty() {
+            let event = self._libinput.next().await?;
+            if matches!(event.event_type, DeviceAdded | DeviceRemoved) {
+                continue;
+            }
+            let changed = self.state == Idle;
+            self.state = NotIdle;
+            return Ok(changed);
+        }
+        Ok(false)
+    }
+
+
+    pub async fn fade_backlight<F: EasingFunction>(&mut self, goal: u8, time_secs: f32, func: impl Borrow<F> + Copy) -> Result<()> {
+        let time_start = Instant::now();
+        let starting_backlight = self.current_backlight as f32;
+        let goal_backlight = goal as f32;
+
+        let mut elapsed;
+        // instant when we started the animation
+        let mut iteration_start;
+
+        println!("{starting_backlight} -> {goal_backlight} in {time_secs}");
+        
+        loop {
+            iteration_start = Instant::now();
+
+            elapsed = time_start.elapsed().as_secs_f32();
+
+            if elapsed >= time_secs {
+                if self.current_backlight != goal {
+                    self.set_backlight(goal)?;
+                }
+                break;
+            }
+
+            let tween = ease_with_scaled_time(func, starting_backlight, goal_backlight, elapsed, time_secs);
+            let tween = tween as u8;
+            if tween == self.current_backlight {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                continue;
+            }
+            self.set_backlight(tween)?;
+            println!("tween={tween}, elapsed={elapsed}");
+            
+            // if we're dimming down, we should be checking for being no longer idle
+            // if start > end {
+                
+            //     break;
+            // }
+
+            // sleep so we don't make a million ectool calls
+            let Some(sleep_timer) = Duration::from_millis(50).checked_sub(iteration_start.elapsed()) else { continue; };
+            tokio::time::sleep(sleep_timer).await;
+        }
         Ok(())
     }
 
@@ -197,14 +304,14 @@ impl Fwkbd {
     }
 }
 
-use libinput::*;
-
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut input = LibinputEventListener::new();
+    let mut input = libinput::LibinputEventListener::new();
 
-    let backlight = 60;
+    let backlight = 100;
 
+    let timeout = Duration::from_millis(4_000);
+    
     // get an X11 connection
     let (conn, screen_num) = x11rb::connect(None)?;
     let screen = conn.setup().roots[screen_num].root;
@@ -215,7 +322,7 @@ async fn main() -> Result<()> {
 
     // start the program
     let mut fwkbd = Fwkbd::new(conn, screen, 4_000, backlight);
-    fwkbd.main_loop()?;
+    fwkbd.async_loop().await?;
 
     Ok(())
 }

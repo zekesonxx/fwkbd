@@ -96,7 +96,6 @@ impl LibinputEventListener {
                 return;
             };
             while poll(&mut [PollFd::new(&input, PollFlags::IN)], -1).is_ok() {
-                println!("dispatch called");
                 let Ok(_) = input.dispatch() else { return; };
                 for ref event in &mut input {
                     let Ok(_) = tx.blocking_send(event.into()) else {
@@ -112,10 +111,12 @@ impl LibinputEventListener {
         }
     }
 
-    pub async fn is_empty(&self) -> bool {
+    /// Return `true` if no messages are currently queued up
+    pub fn is_empty(&self) -> bool {
         self._rx.is_empty()
     }
 
+    /// Wait for the next event and return it
     pub async fn next(&mut self) -> Result<LibinputSyncEvent> {
         self._rx.recv().await.ok_or_else(|| anyhow!("libinput event handler died"))
     }
