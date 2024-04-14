@@ -1,6 +1,7 @@
 use std::borrow::Borrow;
 use std::process::Stdio;
 use libinput::LibinputEventListener;
+use uleds::Uleds;
 use std::time::{Duration, Instant};
 
 use keyframe::{ease_with_scaled_time, EasingFunction};
@@ -9,6 +10,7 @@ use keyframe::functions;
 
 use anyhow::Result;
 
+mod uleds;
 mod libinput;
 
 fn ectool_pwmsetkblight_blocking(level: u8) -> Result<()> {
@@ -84,7 +86,7 @@ impl Fwkbd {
         Ok(())
     }
 
-    pub async fn async_loop(&mut self) -> Result<()> {
+    pub async fn async_loop(&mut self, uleds: Uleds) -> Result<()> {
         use State::*;
 
         // reset to max backlight
@@ -93,17 +95,35 @@ impl Fwkbd {
         let timeout = self.timeout;
     
         loop {
+            // get the uled brightness once to prevent race conditions
+            let uleds_brightness = uleds.brightness();
+            if self.backlight != uleds_brightness {
+                // user changed the led brightness
+                self.state = NotIdle;
+                self.backlight = uleds_brightness;
+                self.fade_accordingly().await?;
+            }
+
             match self.state {
                 Idle => {
-                    if self.get_next_event().await? {
-                        println!("newly not idle");
-                        self.fade_accordingly().await?;
+                    tokio::select! {
+                        _ = self.get_next_event() => {
+                            println!("newly not idle");
+                            self.fade_accordingly().await?;
+
+                        }
+                        _ = uleds.wait_for_update() => {
+                            //brightness update
+                        }
                     }
                 },
                 NotIdle => {
                     tokio::select! {
                         _ = self.get_next_event() => {
                             //idle timer reset
+                        }
+                        _ = uleds.wait_for_update() => {
+                            //brightness update
                         }
                         _ = tokio::time::sleep(timeout) => {
                             self.state = Idle;
@@ -224,9 +244,16 @@ impl Fwkbd {
 async fn main() -> Result<()> {
     let backlight = 100;
 
+    let uleds = Uleds::new(100).await?;
+
+    // println!("{:?}", uleds.poll().await);
+    // println!("{:?}", uleds.poll().await);
+    // println!("{:?}", uleds.poll().await);
+    // println!("{:?}", uleds.poll().await);
+
     // start the program
     let mut fwkbd = Fwkbd::new(Duration::from_millis(4_000), backlight);
-    fwkbd.async_loop().await?;
+    fwkbd.async_loop(uleds).await?;
 
     Ok(())
 }
