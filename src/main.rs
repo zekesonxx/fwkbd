@@ -79,6 +79,17 @@ impl Fwkbd {
         }
     }
 
+    /// returns `true` if uleds is present and could wait
+    /// returns `false` immediately if uleds is None
+    async fn wait_for_uleds(uleds: &Option<Uleds>) -> bool {
+        if let Some(ref uleds) = uleds {
+            uleds.wait_for_update().await;
+            true
+        } else {
+            false
+        }
+    }
+
     pub async fn set_backlight(&mut self, level: u8) -> Result<()> {
         ectool_pwmsetkblight(level).await?;
         self.current_backlight = level;
@@ -86,8 +97,14 @@ impl Fwkbd {
         Ok(())
     }
 
-    pub async fn async_loop(&mut self, uleds: Uleds) -> Result<()> {
+    pub async fn async_loop(&mut self, enable_uleds: bool) -> Result<()> {
         use State::*;
+
+        let uleds = if enable_uleds {
+            Some(Uleds::new(self.backlight).await?)
+        } else {
+            None
+        };
 
         // reset to max backlight
         self.set_backlight(self.backlight).await?;
@@ -95,13 +112,15 @@ impl Fwkbd {
         let timeout = self.timeout;
     
         loop {
-            // get the uled brightness once to prevent race conditions
-            let uleds_brightness = uleds.brightness();
-            if self.backlight != uleds_brightness {
-                // user changed the led brightness
-                self.state = NotIdle;
-                self.backlight = uleds_brightness;
-                self.fade_accordingly().await?;
+            if let Some(ref uleds) = uleds {
+                // get the uled brightness once to prevent race conditions
+                let uleds_brightness = uleds.brightness();
+                if self.backlight != uleds_brightness {
+                    // user changed the led brightness
+                    self.state = NotIdle;
+                    self.backlight = uleds_brightness;
+                    self.fade_accordingly().await?;
+                }
             }
 
             match self.state {
@@ -112,7 +131,7 @@ impl Fwkbd {
                             self.fade_accordingly().await?;
 
                         }
-                        _ = uleds.wait_for_update() => {
+                        _ = Self::wait_for_uleds(&uleds) => {
                             //brightness update
                         }
                     }
@@ -122,7 +141,7 @@ impl Fwkbd {
                         _ = self.get_next_event() => {
                             //idle timer reset
                         }
-                        _ = uleds.wait_for_update() => {
+                        _ = Self::wait_for_uleds(&uleds) => {
                             //brightness update
                         }
                         _ = tokio::time::sleep(timeout) => {
@@ -214,9 +233,9 @@ impl Fwkbd {
                 break;
             }
 
-            let tween = ease_with_scaled_time(func, starting_backlight, goal_backlight, elapsed, time_secs);
-            let tween = tween as u8;
+            let tween = ease_with_scaled_time(func, starting_backlight, goal_backlight, elapsed, time_secs) as u8;
             if tween == self.current_backlight {
+                println!("tweened too fast");
                 tokio::time::sleep(Duration::from_millis(10)).await;
                 continue;
             }
@@ -244,16 +263,9 @@ impl Fwkbd {
 async fn main() -> Result<()> {
     let backlight = 100;
 
-    let uleds = Uleds::new(100).await?;
-
-    // println!("{:?}", uleds.poll().await);
-    // println!("{:?}", uleds.poll().await);
-    // println!("{:?}", uleds.poll().await);
-    // println!("{:?}", uleds.poll().await);
-
     // start the program
     let mut fwkbd = Fwkbd::new(Duration::from_millis(4_000), backlight);
-    fwkbd.async_loop(uleds).await?;
+    fwkbd.async_loop(true).await?;
 
     Ok(())
 }
