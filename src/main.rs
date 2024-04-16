@@ -1,5 +1,6 @@
 use std::borrow::Borrow;
 use std::process::Stdio;
+use clap::Parser;
 use libinput::LibinputEventListener;
 use log::{debug, error, info, trace};
 use uleds::Uleds;
@@ -7,16 +8,14 @@ use std::time::{Duration, Instant};
 
 use keyframe::{ease_with_scaled_time, EasingFunction};
 
-use keyframe::functions;
-
 use anyhow::Result;
 
 mod uleds;
 mod libinput;
+mod cli;
 
 /// Execute `ectool pwmsetkblight <level>`
 async fn ectool_pwmsetkblight(level: u8) -> Result<()> {
-    let i = Instant::now();
     let cmd = tokio::process::Command::new("ectool")
         // we specify the interface because otherwise ectool has to figure it out itself
         // and it takes a while: ~12ms vs ~6ms
@@ -28,7 +27,6 @@ async fn ectool_pwmsetkblight(level: u8) -> Result<()> {
         .stderr(Stdio::inherit())
         .output().await?;
     if cmd.status.success() {
-        debug!("ectool took {:?}", i.elapsed());
         Ok(())
     } else {
         anyhow::bail!("ectool error: {}", String::from_utf8_lossy(&cmd.stderr));
@@ -48,20 +46,27 @@ struct Fwkbd {
     backlight: u8,
     timeout: Duration,
     /// Time to fade in the keyboard, in seconds
-    fade_in: f32,
+    fade_in: Duration,
     /// Time to fade out the keyboard, in seconds
-    fade_out: f32,
+    fade_out: Duration,
+    uleds: bool,
+    ease_in: cli::KeyframeFunction,
+    ease_out: cli::KeyframeFunction,
 }
 
 impl Fwkbd {
-    pub fn new(timeout: Duration, backlight: u8) -> Self {
+    pub fn new(args: &cli::Args) -> Self {
         Fwkbd {
             _libinput: LibinputEventListener::new(),
             state: State::NotIdle,
-            current_backlight: backlight,
-            backlight, timeout,
-            fade_in: 0.2,
-            fade_out: 1.0
+            current_backlight: args.brightness,
+            backlight: args.brightness,
+            timeout: Duration::from_secs_f32(args.timeout),
+            fade_in: Duration::from_secs_f32(args.fade_in),
+            fade_out: Duration::from_secs_f32(args.fade_out),
+            uleds: !args.no_uleds,
+            ease_in: args.ease_in,
+            ease_out: args.ease_out,
         }
     }
 
@@ -83,11 +88,11 @@ impl Fwkbd {
         Ok(())
     }
 
-    pub async fn async_loop(&mut self, enable_uleds: bool) -> Result<()> {
+    pub async fn async_loop(&mut self) -> Result<()> {
         use State::*;
 
-        let uleds = if enable_uleds {
-            Some(Uleds::new(self.backlight).await?)
+        let uleds = if self.uleds {
+            Uleds::new(self.backlight).await.ok()
         } else {
             None
         };
@@ -151,10 +156,10 @@ impl Fwkbd {
         trace!("fade_accordingly()");
         match self.state {
             State::Idle => if self.current_backlight != 0 {
-                tokio::task::unconstrained(self.fade_backlight(0, self.fade_out, functions::EaseOut)).await?;
+                tokio::task::unconstrained(self.fade_backlight(0, self.fade_out, self.ease_out)).await?;
             },
             State::NotIdle => if self.current_backlight != self.backlight {
-                tokio::task::unconstrained(self.fade_backlight(self.backlight, self.fade_in, functions::EaseInQuad)).await?;
+                tokio::task::unconstrained(self.fade_backlight(self.backlight, self.fade_in, self.ease_in)).await?;
             },
         }
         Ok(())
@@ -195,7 +200,7 @@ impl Fwkbd {
 
 
     /// Fade the keyboard backlight from the current brightness to the goal brightness
-    pub async fn fade_backlight<F: EasingFunction>(&mut self, goal: u8, time_secs: f32, func: impl Borrow<F> + Copy) -> Result<()> {
+    pub async fn fade_backlight<F: EasingFunction>(&mut self, goal: u8, time: Duration, func: impl Borrow<F> + Copy) -> Result<()> {
         trace!("fade_backlight(goal={goal})");
         let time_start = Instant::now();
         let starting_backlight = self.current_backlight as f32;
@@ -215,16 +220,16 @@ impl Fwkbd {
         loop {
             iteration_start = Instant::now();
 
-            elapsed = time_start.elapsed().as_secs_f32();
+            elapsed = time_start.elapsed();
 
-            if elapsed >= time_secs {
+            if elapsed >= time {
                 if self.current_backlight != goal {
                     self.set_backlight(goal).await?;
                 }
                 break;
             }
 
-            let tween = ease_with_scaled_time(func, starting_backlight, goal_backlight, elapsed, time_secs) as u8;
+            let tween = ease_with_scaled_time(func, starting_backlight, goal_backlight, elapsed.as_secs_f32(), time.as_secs_f32()) as u8;
             if tween == self.current_backlight {
                 debug!("tweened too fast");
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -235,7 +240,7 @@ impl Fwkbd {
             self.set_backlight(tween).await?;
             #[cfg(debug_assertions)]
             ectool_avg.push(i.elapsed());
-            debug!("tween={tween}, elapsed={elapsed}");
+            debug!("tween={tween}, elapsed={elapsed:?}");
 
             if tween == goal {
                 break;
@@ -263,15 +268,15 @@ impl Fwkbd {
 #[tokio::main]
 //#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
+    let args = cli::Args::parse();
+
     env_logger::init();
 
-    let backlight = 100;
-
     // start the program
-    let mut fwkbd = Fwkbd::new(Duration::from_millis(5_000), backlight);
+    let mut fwkbd = Fwkbd::new(&args);
 
     tokio::select! {
-        e = fwkbd.async_loop(true) => {
+        e = fwkbd.async_loop() => {
             e?;
         }
         _ = tokio::signal::ctrl_c() => {
