@@ -7,15 +7,19 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.82"
+env_logger = "0.11.3"
 input = "0.9.0"
 keyframe = { version = "1.1.1", default-features = false }
 libc = "0.2.153"
+log = { version = "0.4", features = ["std", "max_level_trace", "release_max_level_warn"] }
 rustix = { version = "0.38.32", features = ["event"] }
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["fs", "rt", "rt-multi-thread", "signal", "process", "io-util", "sync", "macros", "time"] }
 
+[profile.dev]
+opt-level = 3
 
 [profile.release]
-opt-level = 3
+opt-level = "z"
 codegen-units = 1
 panic = "abort"
 strip = true

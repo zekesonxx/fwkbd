@@ -1,6 +1,7 @@
 //! libinput wrapper code
 use anyhow::{Result, anyhow};
 use input::event::EventTrait;
+use log::error;
 use tokio::{sync::mpsc, task::JoinHandle};
 
 use std::time::Instant;
@@ -92,11 +93,16 @@ impl LibinputEventListener {
             while poll(&mut [PollFd::new(&input, PollFlags::IN)], -1).is_ok() {
                 let Ok(_) = input.dispatch() else { return; };
                 for ref event in &mut input {
-                    let Ok(_) = tx.blocking_send(event.into()) else {
-                        return;
-                    };
+                    // throw away events if we fill up the buffer
+                    // so we don't anger libinput
+                    if tx.capacity() > 1 {
+                        let Ok(_) = tx.blocking_send(event.into()) else {
+                            return;
+                        };
+                    }
                 }
             }
+            error!("libinput event listener died");
         });
         
         Self {
