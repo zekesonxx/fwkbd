@@ -45,7 +45,7 @@ impl keyframe::EasingFunction for KeyframeFunction {
     }
 }
 
-/// Unofficial Framework Laptop keyboard backlight fade in/out daemon
+/// Keyboard backlight fade in/out daemon for Framework laptops
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 #[command(after_help="Easing curves accept any curve name from the keyframes crate:\nhttps://docs.rs/keyframe/latest/keyframe/functions/index.html")]
@@ -68,7 +68,7 @@ pub struct Args {
     pub fade_in: f32,
 
     /// How long, in seconds, to fade the keyboard backlight out
-    #[arg(short='o', long, default_value_t = 2.0)]
+    #[arg(short='o', long, default_value_t = 1.0)]
     pub fade_out: f32,
 
     /// Animation curve for fading in
@@ -78,4 +78,8 @@ pub struct Args {
     /// Animation curve for fading out
     #[arg(long, value_enum, hide_possible_values=true, default_value_t = KeyframeFunction::EaseOut)]
     pub ease_out: KeyframeFunction,
+
+    /// Ignore pointer movements, only consider keyboard movements
+    #[arg(long, default_value_t = false)]
+    pub ignore_pointer: bool,
 }

@@ -33,10 +33,10 @@ impl LibinputInterface for Interface {
 
 #[derive(Clone, Debug)]
 pub struct LibinputSyncEvent {
-    pub device_name: String,
-    pub sysname: String,
-    pub id_product: u32,
-    pub id_vendor: u32,
+    // pub device_name: String,
+    // pub sysname: String,
+    // pub id_product: u32,
+    // pub id_vendor: u32,
     pub event_type: LibinputSyncEventType,
     pub instant: Instant,
 }
@@ -55,13 +55,13 @@ impl From<&input::Event> for LibinputSyncEvent {
     fn from(e: &input::Event) -> Self {
         use input::Event::*;
         use LibinputSyncEventType as t;
-        let d = e.device();
+        // let d = e.device();
         LibinputSyncEvent {
             instant: Instant::now(),
-            device_name: d.name().to_string(),
-            sysname: d.sysname().to_string(),
-            id_product: d.id_product(),
-            id_vendor: d.id_vendor(),
+            // device_name: d.name().to_string(),
+            // sysname: d.sysname().to_string(),
+            // id_product: d.id_product(),
+            // id_vendor: d.id_vendor(),
             event_type: match e {
                 Device(input::event::DeviceEvent::Added(_)) => t::DeviceAdded,
                 Device(input::event::DeviceEvent::Removed(_)) => t::DeviceRemoved,

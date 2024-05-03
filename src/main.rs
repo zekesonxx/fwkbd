@@ -52,6 +52,8 @@ struct Fwkbd {
     uleds: bool,
     ease_in: cli::KeyframeFunction,
     ease_out: cli::KeyframeFunction,
+    ignore_pointer: bool,
+    tween_spacing: Duration
 }
 
 impl Fwkbd {
@@ -67,6 +69,8 @@ impl Fwkbd {
             uleds: !args.no_uleds,
             ease_in: args.ease_in,
             ease_out: args.ease_out,
+            ignore_pointer: args.ignore_pointer,
+            tween_spacing: Duration::from_millis(50)
         }
     }
 
@@ -92,7 +96,11 @@ impl Fwkbd {
         use State::*;
 
         let uleds = if self.uleds {
-            Uleds::new(self.backlight).await.ok()
+            debug!("getting uleds handle");
+            Uleds::new(self.backlight).await.map_err(|e| {
+                error!("error getting uleds handle: {e}");
+                e
+            }).ok()
         } else {
             None
         };
@@ -108,6 +116,7 @@ impl Fwkbd {
                 let uleds_brightness = uleds.brightness();
                 if self.backlight != uleds_brightness {
                     // user changed the led brightness
+                    info!("uleds brightness changed to {uleds_brightness}");
                     self.state = NotIdle;
                     self.backlight = uleds_brightness;
                     self.fade_accordingly().await?;
@@ -118,11 +127,10 @@ impl Fwkbd {
                 Idle => {
                     tokio::select! {
                         _ = self.get_next_event() => {
-                            info!("newly not idle");
                             self.fade_accordingly().await?;
 
                         }
-                        _ = Self::wait_for_uleds(&uleds) => {
+                        true = Self::wait_for_uleds(&uleds) => {
                             //brightness update
                         }
                     }
@@ -132,7 +140,7 @@ impl Fwkbd {
                         _ = self.get_next_event() => {
                             //idle timer reset
                         }
-                        _ = Self::wait_for_uleds(&uleds) => {
+                        true = Self::wait_for_uleds(&uleds) => {
                             //brightness update
                         }
                         _ = tokio::time::sleep(timeout) => {
@@ -172,7 +180,8 @@ impl Fwkbd {
         use State::*;
         use libinput::LibinputSyncEventType::*;
         let event = self._libinput.next().await?;
-        if matches!(event.event_type, DeviceAdded | DeviceRemoved) {
+        if matches!(event.event_type, DeviceAdded | DeviceRemoved) ||
+            (self.ignore_pointer && matches!(event.event_type, Gesture | Pointer)) {
             return Ok(false);
         }
         let changed = self.state == Idle;
@@ -188,7 +197,8 @@ impl Fwkbd {
         use libinput::LibinputSyncEventType::*;
         while !self._libinput.is_empty() {
             let event = self._libinput.next().await?;
-            if matches!(event.event_type, DeviceAdded | DeviceRemoved) {
+            if matches!(event.event_type, DeviceAdded | DeviceRemoved) ||
+                (self.ignore_pointer && matches!(event.event_type, Gesture | Pointer)) {
                 continue;
             }
             let changed = self.state == Idle;
@@ -202,6 +212,11 @@ impl Fwkbd {
     /// Fade the keyboard backlight from the current brightness to the goal brightness
     pub async fn fade_backlight<F: EasingFunction>(&mut self, goal: u8, time: Duration, func: impl Borrow<F> + Copy) -> Result<()> {
         trace!("fade_backlight(goal={goal})");
+
+        if time.is_zero() {
+            return self.set_backlight(goal).await;
+        }
+
         let time_start = Instant::now();
         let starting_backlight = self.current_backlight as f32;
         let goal_backlight = goal as f32;
@@ -224,7 +239,11 @@ impl Fwkbd {
 
             if elapsed >= time {
                 if self.current_backlight != goal {
+                    #[cfg(debug_assertions)]
+                    let i = Instant::now();
                     self.set_backlight(goal).await?;
+                    #[cfg(debug_assertions)]
+                    ectool_avg.push(i.elapsed());
                 }
                 break;
             }
@@ -232,7 +251,7 @@ impl Fwkbd {
             let tween = ease_with_scaled_time(func, starting_backlight, goal_backlight, elapsed.as_secs_f32(), time.as_secs_f32()) as u8;
             if tween == self.current_backlight {
                 debug!("tweened too fast");
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                tokio::time::sleep(self.tween_spacing).await;
                 continue;
             }
             #[cfg(debug_assertions)]
@@ -256,17 +275,20 @@ impl Fwkbd {
             }
 
             // sleep so we don't make a million ectool calls
-            let Some(sleep_timer) = Duration::from_millis(50).checked_sub(iteration_start.elapsed()) else { continue; };
+            let Some(sleep_timer) = self.tween_spacing.checked_sub(iteration_start.elapsed()) else { continue; };
             tokio::time::sleep(sleep_timer).await;
         }
         #[cfg(debug_assertions)]
-        debug!("ectool averaged {:?}", ectool_avg.iter().sum::<Duration>().checked_div(ectool_avg.len() as u32).unwrap());
+        debug!("ectool ran {} times and averaged {:?}",
+            ectool_avg.len(),
+            ectool_avg.iter().sum::<Duration>().checked_div(ectool_avg.len() as u32).unwrap()
+        );
         Ok(())
     }
 }
 
-#[tokio::main]
-//#[tokio::main(flavor = "current_thread")]
+//#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let args = cli::Args::parse();
 
@@ -281,11 +303,10 @@ async fn main() -> Result<()> {
         }
         _ = tokio::signal::ctrl_c() => {
             error!("got SIGTERM, resetting backlight and closing");
-            fwkbd.set_backlight(fwkbd.backlight).await?;
+            let _ = fwkbd.set_backlight(fwkbd.backlight).await;
             std::process::exit(0);
         }
     }
-    //fwkbd.async_loop(true).await?;
 
     Ok(())
 }
