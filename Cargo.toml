@@ -15,6 +15,7 @@ libc = "0.2.153"
 log = { version = "0.4", features = ["std", "max_level_trace", "release_max_level_warn"] }
 rustix = { version = "0.38.32", features = ["event"] }
 tokio = { version = "1", features = ["fs", "rt", "rt-multi-thread", "signal", "process", "io-util", "sync", "macros", "time"] }
+framework_lib = { git = "https://github.com/FrameworkComputer/framework-system", rev="b03685b932cea0e8492592c138b8d20b5c0ac7c5" }
 
 [profile.dev]
 opt-level = 3

@@ -1,6 +1,7 @@
 use std::borrow::Borrow;
 use std::process::Stdio;
 use clap::Parser;
+use framework_lib::chromium_ec::{CrosEc, CrosEcDriverType};
 use libinput::LibinputEventListener;
 use log::{debug, error, info, trace};
 use uleds::Uleds;
@@ -41,14 +42,19 @@ enum State {
 
 struct Fwkbd {
     _libinput: LibinputEventListener,
+    _ec: Option<CrosEc>,
+    ec_driver: CrosEcDriverType,
     state: State,
+    /// The current backlight setting, i.e. what we last tried to set it as
     current_backlight: u8,
+    /// The desired backlight setting, i.e. what the user wants it to be
     backlight: u8,
     timeout: Duration,
-    /// Time to fade in the keyboard, in seconds
+    /// Time to fade in the keyboard
     fade_in: Duration,
-    /// Time to fade out the keyboard, in seconds
+    /// Time to fade out the keyboard
     fade_out: Duration,
+    /// Whether we're listening for uleds changes or not
     uleds: bool,
     ease_in: cli::KeyframeFunction,
     ease_out: cli::KeyframeFunction,
@@ -57,9 +63,11 @@ struct Fwkbd {
 }
 
 impl Fwkbd {
-    pub fn new(args: &cli::Args) -> Self {
-        Fwkbd {
+    pub async fn new(args: &cli::Args) -> Result<Self> {
+        Ok(Fwkbd {
             _libinput: LibinputEventListener::new(),
+            _ec: None,
+            ec_driver: args.driver.as_drivertype().await?,
             state: State::NotIdle,
             current_backlight: args.brightness,
             backlight: args.brightness,
@@ -70,8 +78,8 @@ impl Fwkbd {
             ease_in: args.ease_in,
             ease_out: args.ease_out,
             ignore_pointer: args.ignore_pointer,
-            tween_spacing: Duration::from_millis(50)
-        }
+            tween_spacing: Duration::from_millis(50),
+        })
     }
 
     /// returns `true` if uleds is present and could wait
@@ -87,9 +95,30 @@ impl Fwkbd {
 
     pub async fn set_backlight(&mut self, level: u8) -> Result<()> {
         trace!("set_backlight({level})");
-        ectool_pwmsetkblight(level).await?;
-        self.current_backlight = level;
+        self.get_ec_handle()?;
+        if let Some(ref ec) = self._ec {
+            tokio::task::block_in_place(|| ec.set_keyboard_backlight(level));
+            self.current_backlight = level;
+        }
         Ok(())
+    }
+
+    fn get_ec_handle(&mut self) -> Result<()> {
+        if self._ec.is_none() {
+            let res = tokio::task::block_in_place(|| {
+                let ec = CrosEc::with(self.ec_driver);
+                match ec {
+                    Some(ec) => Ok(ec),
+                    None => anyhow::bail!("Failed to access EC"),
+                }
+            });
+            self._ec = Some(res?);
+        }
+        Ok(())
+    }
+
+    fn flush_ec_handle(&mut self) {
+        self._ec = None;
     }
 
     pub async fn async_loop(&mut self) -> Result<()> {
@@ -153,6 +182,7 @@ impl Fwkbd {
                     }
                 },
             }
+            self.flush_ec_handle();
         }
     }
 
@@ -288,14 +318,15 @@ impl Fwkbd {
 }
 
 //#[tokio::main]
-#[tokio::main(flavor = "current_thread")]
+//#[tokio::main(flavor = "current_thread")]
+#[tokio::main(worker_threads = 2)]
 async fn main() -> Result<()> {
     let args = cli::Args::parse();
 
     env_logger::init();
 
     // start the program
-    let mut fwkbd = Fwkbd::new(&args);
+    let mut fwkbd = Fwkbd::new(&args).await?;
 
     tokio::select! {
         e = fwkbd.async_loop() => {

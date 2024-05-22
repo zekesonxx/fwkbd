@@ -1,5 +1,6 @@
 use clap::{Parser, ValueEnum};
-
+use framework_lib::chromium_ec::CrosEcDriverType;
+use anyhow::Result;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 #[value(rename_all="verbatim")]
@@ -45,11 +46,39 @@ impl keyframe::EasingFunction for KeyframeFunction {
     }
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+#[value(rename_all="lowercase")]
+pub enum EcDriver {
+    Auto,
+    Portio,
+    CrosEc
+}
+
+impl EcDriver {
+    pub async fn as_drivertype(&self) -> Result<CrosEcDriverType> {
+        Ok(match self {
+            EcDriver::Portio => CrosEcDriverType::Portio,
+            EcDriver::CrosEc => CrosEcDriverType::CrosEc,
+            EcDriver::Auto => {
+                if tokio::fs::try_exists("/dev/cros_ec").await? {
+                    CrosEcDriverType::CrosEc
+                } else {
+                    CrosEcDriverType::Portio
+                }
+            },
+        })
+    }
+}
+
 /// Keyboard backlight fade in/out daemon for Framework laptops
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 #[command(after_help="Easing curves accept any curve name from the keyframes crate:\nhttps://docs.rs/keyframe/latest/keyframe/functions/index.html")]
 pub struct Args {
+    /// Driver to use to talk to the embedded controller
+    #[arg(long, value_enum, default_value_t = EcDriver::Auto)]
+    pub driver: EcDriver,
+
     /// Seconds until the keyboard backlight times out
     #[arg(short, long, default_value_t = 5.0)]
     pub timeout: f32,

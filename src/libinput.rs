@@ -1,6 +1,5 @@
 //! libinput wrapper code
 use anyhow::{Result, anyhow};
-use input::event::EventTrait;
 use log::error;
 use tokio::{sync::mpsc, task::JoinHandle};
 
