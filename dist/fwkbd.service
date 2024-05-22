@@ -1,0 +1,8 @@
+[Unit]
+Description=Framework keyboard fade in/out daemon
+
+[Service]
+ExecStart=/usr/bin/fwkbd
+
+[Install]
+WantedBy=multi-user.target
