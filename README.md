@@ -16,6 +16,7 @@ Inspired heavily by the automatic dimming behavior of Macbook keyboards.
 Things I'd like to add in the future:
 * **Better libinput event handling**: right now libinput events are queued up back to the main thread, there's really no reason for this, they could be filtered on the libinput thread and have very little info sent back over.
 * **Filter to specific event sources**: e.x. to only allow input on the Framework's keyboard and trackpad to reset the idle timer, ignoring any external keyboards or mice.
-* **Direct EC communication**: This tool uses ectool under the hood to speak to the EC. I'd like to have it talk to the EC directly to reduce overhead.
+* ~~**Direct EC communication**: This tool uses ectool under the hood to speak to the EC. I'd like to have it talk to the EC directly to reduce overhead.~~
+* **Ambient light sensor detecting**: again, copying Macbook behavior, use the ambient light sensor to know when it's bright in a room and leave the keyboard backlight off for power savings
 
   [uleds]: https://www.kernel.org/doc/html/latest/leds/uleds.html
